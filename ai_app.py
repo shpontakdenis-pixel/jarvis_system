@@ -13,7 +13,6 @@ from PyQt6.QtGui import QPainter, QColor, QPen, QFont
 API_KEY = "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"
 client = Groq(api_key=API_KEY)
 
-# Список моделей для переключения (от самой мощной к самой быстрой)
 AI_MODELS = ["llama3-70b-8192", "llama3-8b-8192", "mixtral-8x7b-32768"]
 
 class SignalsWrapper(QObject):
@@ -26,7 +25,7 @@ class JarvisUI(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.resize(300, 300)
-        self.status_text = "ONLINE"
+        self.status_text = "JARVIS"
         self.angle = 0
         self.old_pos = None
         self.timer = QTimer()
@@ -46,7 +45,7 @@ class JarvisUI(QWidget):
     def paintEvent(self, event):
         self.angle = (self.angle + 3) % 360
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         color = QColor(0, 210, 255, 200)
         painter.setPen(QPen(color, 4))
         rect = self.rect().adjusted(70, 70, -70, -70)
@@ -62,9 +61,12 @@ class JarvisUI(QWidget):
 class JarvisBrain:
     def __init__(self, signals):
         self.signals = signals
-        self.names = ["арай", "арайс", "райс", "арис", "джарвис", "эрайс"]
-        self.stop_phrases = ["стоп", "спи", "выход", "отключись", "пока"]
-        self.shut_up_phrases = ["понял", "хватит", "тихо", "замолчи", "хорош"]
+        # ТЕПЕРЬ РАЗДЕЛЯЕМ:
+        self.activation_names = ["арай", "арайс", "райс", "арис", "эрайс"] # Команды активации
+        self.bot_name = "Джарвис" 
+        
+        self.stop_phrases = ["стоп", "спи", "выход", "отключись"]
+        self.shut_up_phrases = ["понял", "хватит", "тихо", "замолчи"]
         self.recognizer = sr.Recognizer()
         self.is_speaking = False
 
@@ -86,52 +88,47 @@ class JarvisBrain:
 
     def ask_ai(self, prompt):
         self.signals.emit_status("THINK")
-        # Пробуем по очереди каждую модель из списка
         for model in AI_MODELS:
             try:
-                print(f"[ИИ] Пробую модель: {model}")
                 completion = client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": "Ты - Арайс, продвинутый ИИ. Отвечай кратко (1-3 предложения), четко и с характером Джарвиса из Марвел. Твой создатель из Украины. Сейчас 2026 год."},
+                        {"role": "system", "content": f"Ты — {self.bot_name}, продвинутый ИИ. Твой создатель из Украины. Отвечай кратко, преданно и с легким сарказмом. Ты знаешь, что команда 'Арайс' тебя активирует."},
                         {"role": "user", "content": prompt}
                     ]
                 )
                 return completion.choices[0].message.content
             except Exception as e:
-                print(f"[ОШИБКА] Модель {model} недоступна: {e}")
-                continue # Переходим к следующей модели
-        
-        return "Сэр, все мои нейронные модули сейчас перегружены. Попробуйте позже."
+                print(f"[ОШИБКА] {model}: {e}")
+                continue
+        return "Сэр, все системы перегружены."
 
     def handle_command(self, command):
         command = command.lower()
         
-        # Если нужно заткнуть
         if any(word in command for word in self.shut_up_phrases) and self.is_speaking:
             return
-
-        # Если команда стоп
+            
         if any(stop in command for stop in self.stop_phrases):
-            self.say("Протоколы завершены. Ухожу в офлайн.")
+            self.say(f"Протоколы завершены. До связи.")
             time.sleep(2)
             sys.exit()
-
-        # Поиск имени
-        if any(name in command for name in self.names):
+            
+        # ПРОВЕРКА КОМАНДЫ АКТИВАЦИИ
+        if any(name in command for name in self.activation_names):
             clean_command = command
-            for name in self.names:
+            for name in self.activation_names:
                 clean_command = clean_command.replace(name, "").strip()
             
             if not clean_command:
-                self.say(random.choice(["Слушаю.", "Да, сэр?", "Я на связи."]))
+                self.say("Да, слушаю вас.")
             else:
                 answer = self.ask_ai(clean_command)
                 self.say(answer)
 
     def run(self):
         time.sleep(1)
-        self.say("Система Арайс полностью функциональна.")
+        self.say(f"{self.bot_name} в сети.")
         while True:
             with sr.Microphone() as source:
                 self.signals.emit_status("LISTEN")
