@@ -3,12 +3,14 @@ import threading
 import speech_recognition as sr
 import pyttsx3
 import random
+import time
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont
 
-class JarvisSignals(QObject):
+class SignalsWrapper(QObject):
     status_change = pyqtSignal(str)
+    def emit_status(self, text): self.status_change.emit(text)
 
 class JarvisUI(QWidget):
     def __init__(self):
@@ -16,11 +18,11 @@ class JarvisUI(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.resize(300, 300)
-        self.status_text = "SYSTEM OK"
+        self.status_text = "READY"
         self.angle = 0
         self.old_pos = None
         self.timer = QTimer()
-        self.timer.timeout.connect(lambda: self.update())
+        self.timer.timeout.connect(self.update)
         self.timer.start(20)
 
     def mousePressEvent(self, event):
@@ -46,66 +48,83 @@ class JarvisUI(QWidget):
         painter.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.status_text)
 
+    def update_status(self, text):
+        self.status_text = text
+
 class JarvisBrain:
     def __init__(self, signals):
         self.signals = signals
-        try:
-            self.engine = pyttsx3.init()
-            self.engine.setProperty('rate', 180)
-            self.engine.setProperty('volume', 1.0)
-        except Exception as e:
-            print(f"[ОШИБКА ЗВУКА] {e}")
+        self.engine = pyttsx3.init()
+        self.names = ["арай", "арайс", "райс", "арис", "джарвис", "эрайс", "arys"]
+        self.stop_phrases = ["стоп", "спи", "выход", "отключись", "выключи систему", "пока"]
+        self.shut_up_phrases = ["понял", "хватит", "тихо", "замолчи", "тсс", "хорош"]
         
         self.recognizer = sr.Recognizer()
-        self.names = ["арайс", "джарвис", "эрайс", "arys", "jarvis", "арис"]
+        self.is_speaking = False
 
     def say(self, text):
-        print(f"[ГОЛОС] {text}")
-        self.signals.emit_status("ГОВОРИТ")
-        self.engine.say(text)
-        self.engine.runAndWait()
-        self.signals.emit_status("СЛУШАЕТ")
+        def speak():
+            self.is_speaking = True
+            self.signals.emit_status("SPEAKING")
+            print(f"[ГОЛОС] {text}")
+            self.engine.say(text)
+            self.engine.runAndWait()
+            self.is_speaking = False
+            self.signals.emit_status("LISTENING")
+
+        # Запускаем голос в отдельном потоке, чтобы микрофон не блокировался
+        threading.Thread(target=speak, daemon=True).start()
+
+    def stop_speaking(self):
+        if self.is_speaking:
+            # Принудительно останавливаем движок речи
+            self.engine.stop()
+            self.is_speaking = False
+            self.signals.emit_status("LISTENING")
+            print("[ЛОГИКА] Речь прервана пользователем")
 
     def handle_command(self, command):
-        command = command.strip().lower()
-        # Проверяем наличие любого имени из списка в строке
-        found_name = any(name in command for name in self.names)
+        command = command.lower()
         
+        # 1. Если Джарвис говорит и ты сказал "Понял" - затыкаем его
+        if any(word in command for word in self.shut_up_phrases):
+            if self.is_speaking:
+                self.stop_speaking()
+                responses = ["Принято", "Молчу", "Понял вас", "Хорошо", "Слушаю"]
+                time.sleep(0.5) # Маленькая пауза перед подтверждением
+                self.say(random.choice(responses))
+                return
+
+        # 2. Проверка на полное выключение
+        if any(stop in command for stop in self.stop_phrases):
+            self.say("Система Арайс уходит в спящий режим.")
+            time.sleep(2)
+            sys.exit()
+
+        # 3. Обращение по имени
+        found_name = any(name in command for name in self.names)
         if found_name:
-            print(f"[ЛОГИКА] Имя найдено в фразе!")
-            if any(x in command for x in ["стоп", "выключись", "спи", "завершить"]):
-                self.say("Система Арайс отключается. До связи.")
-                sys.exit()
-            elif any(x in command for x in ["привет", "здравствуй", "ты тут"]):
-                self.say(random.choice(["Приветствую! Слушаю вас.", "Я здесь. Чем могу помочь?", "Система онлайн."]))
+            if "привет" in command:
+                self.say(random.choice(["Приветствую!", "Я на связи.", "Система онлайн."]))
             elif "как дела" in command:
-                self.say("Все системы работают штатно. Готов к выполнению задач.")
+                self.say("Все системы работают на пике возможностей.")
             else:
-                self.say("Да, я вас слушаю.")
-        else:
-            print(f"[ЛОГИКА] Имя не найдено в: {command}")
+                self.say("Да, слушаю вас.")
 
     def run(self):
-        print("[СИСТЕМА] Попытка первого запуска голоса...")
-        self.say("Система Арайс готова.")
-        
+        self.say("Система Арайс онлайн")
         while True:
             with sr.Microphone() as source:
-                self.signals.emit_status("СЛУШАЕТ")
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.8)
+                self.signals.emit_status("LISTENING")
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
                 try:
-                    print("[СЛУХ] Слушаю...")
-                    audio = self.recognizer.listen(source, timeout=None, phrase_time_limit=5)
+                    # phrase_time_limit=3 позволяет быстрее реагировать на короткие фразы типа "понял"
+                    audio = self.recognizer.listen(source, timeout=None, phrase_time_limit=3)
                     query = self.recognizer.recognize_google(audio, language="ru-RU").lower()
-                    print(f"[СЛУХ] Распознано: {query}")
+                    print(f"[СЛУХ] {query}")
                     self.handle_command(query)
-                except Exception as e:
+                except:
                     continue
-
-# Вспомогательный класс для сигналов
-class SignalsWrapper(QObject):
-    status_change = pyqtSignal(str)
-    def emit_status(self, text): self.status_change.emit(text)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
